@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'fs'
 import * as fsp from 'fs/promises'
 import * as os from 'os'
@@ -10,29 +10,66 @@ import {
   getOpenAIOAuthTokensAsync,
   saveOpenAIOAuthTokens,
 } from './storage.js'
+import { plainTextStorage } from '../../utils/secureStorage/plainTextStorage.js'
+import type { OpenAIOAuthTokens } from './types.js'
 
 describe('OpenAI OAuth desktop token file storage', () => {
   let tmpDir: string
   let tokenPath: string
   let originalTokenFile: string | undefined
+  let originalConfigDir: string | undefined
+  let originalHome: string | undefined
+  let originalUserProfile: string | undefined
 
   beforeEach(async () => {
     tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'openai-oauth-storage-'))
     tokenPath = path.join(tmpDir, 'openai-oauth.json')
     originalTokenFile = process.env.OPENAI_CODEX_OAUTH_FILE
+    originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    originalHome = process.env.HOME
+    originalUserProfile = process.env.USERPROFILE
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.HOME = tmpDir
+    process.env.USERPROFILE = tmpDir
     process.env.OPENAI_CODEX_OAUTH_FILE = tokenPath
     clearOpenAIOAuthTokenCache()
   })
 
   afterEach(async () => {
+    plainTextStorage.delete()
     if (originalTokenFile === undefined) {
       delete process.env.OPENAI_CODEX_OAUTH_FILE
     } else {
       process.env.OPENAI_CODEX_OAUTH_FILE = originalTokenFile
     }
+    if (originalConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    }
+    if (originalHome === undefined) {
+      delete process.env.HOME
+    } else {
+      process.env.HOME = originalHome
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE
+    } else {
+      process.env.USERPROFILE = originalUserProfile
+    }
     clearOpenAIOAuthTokenCache()
     await fsp.rm(tmpDir, { recursive: true, force: true })
   })
+
+  function seedSecureStorage(tokens: OpenAIOAuthTokens): void {
+    delete process.env.OPENAI_CODEX_OAUTH_FILE
+    clearOpenAIOAuthTokenCache()
+    expect(
+      plainTextStorage.update({ openaiCodexOauth: tokens }).success,
+    ).toBe(true)
+    process.env.OPENAI_CODEX_OAUTH_FILE = tokenPath
+    clearOpenAIOAuthTokenCache()
+  }
 
   test('reads desktop token file synchronously', async () => {
     await fsp.writeFile(
@@ -118,5 +155,100 @@ describe('OpenAI OAuth desktop token file storage', () => {
 
     expect(deleteOpenAIOAuthTokens()).toBe(true)
     expect(fs.existsSync(tokenPath)).toBe(false)
+  })
+
+  test('returns null from both getters when env override is set but file is missing', async () => {
+    seedSecureStorage({
+      accessToken: 'secure-access',
+      refreshToken: 'secure-refresh',
+      expiresAt: 4_100_000_000_000,
+    })
+
+    expect(getOpenAIOAuthTokens()).toBeNull()
+    await expect(getOpenAIOAuthTokensAsync()).resolves.toBeNull()
+  })
+
+  test('returns null from both getters when env override file contains corrupt json', async () => {
+    seedSecureStorage({
+      accessToken: 'secure-access',
+      refreshToken: 'secure-refresh',
+      expiresAt: 4_100_000_000_000,
+    })
+    await fsp.writeFile(tokenPath, '{ definitely-not-json', 'utf-8')
+
+    expect(getOpenAIOAuthTokens()).toBeNull()
+    await expect(getOpenAIOAuthTokensAsync()).resolves.toBeNull()
+  })
+
+  test('does not fall back to secure storage after deleting env override file', async () => {
+    seedSecureStorage({
+      accessToken: 'secure-access',
+      refreshToken: 'secure-refresh',
+      expiresAt: 4_100_000_000_000,
+    })
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({
+        accessToken: 'desktop-access',
+        refreshToken: 'desktop-refresh',
+        expiresAt: 4_100_000_000_000,
+      }),
+      'utf-8',
+    )
+
+    expect(deleteOpenAIOAuthTokens()).toBe(true)
+    expect(getOpenAIOAuthTokens()).toBeNull()
+    await expect(getOpenAIOAuthTokensAsync()).resolves.toBeNull()
+  })
+
+  test('reloads sync tokens when OPENAI_CODEX_OAUTH_FILE changes without clearing cache', async () => {
+    const tokenPathA = path.join(tmpDir, 'openai-oauth-a.json')
+    const tokenPathB = path.join(tmpDir, 'openai-oauth-b.json')
+    await fsp.writeFile(
+      tokenPathA,
+      JSON.stringify({
+        accessToken: 'access-a',
+        refreshToken: 'refresh-a',
+        expiresAt: 4_100_000_000_001,
+      }),
+      'utf-8',
+    )
+    await fsp.writeFile(
+      tokenPathB,
+      JSON.stringify({
+        accessToken: 'access-b',
+        refreshToken: 'refresh-b',
+        expiresAt: 4_100_000_000_002,
+      }),
+      'utf-8',
+    )
+
+    process.env.OPENAI_CODEX_OAUTH_FILE = tokenPathA
+    expect(getOpenAIOAuthTokens()?.accessToken).toBe('access-a')
+
+    process.env.OPENAI_CODEX_OAUTH_FILE = tokenPathB
+    expect(getOpenAIOAuthTokens()?.accessToken).toBe('access-b')
+  })
+
+  test('cleans up tmp file if desktop token rename fails', async () => {
+    const renameSyncSpy = spyOn(fs, 'renameSync').mockImplementation(() => {
+      const error = new Error('rename failed') as NodeJS.ErrnoException
+      error.code = 'EXDEV'
+      throw error
+    })
+
+    const result = saveOpenAIOAuthTokens({
+      accessToken: 'fresh-access',
+      refreshToken: 'fresh-refresh',
+      expiresAt: 4_100_000_000_000,
+    })
+
+    renameSyncSpy.mockRestore()
+
+    expect(result.success).toBe(false)
+    const tmpFiles = (await fsp.readdir(tmpDir)).filter((name) =>
+      name.startsWith('openai-oauth.json.tmp.'),
+    )
+    expect(tmpFiles).toEqual([])
   })
 })

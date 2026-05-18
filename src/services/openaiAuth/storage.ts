@@ -13,6 +13,8 @@ type SecureStorageShape = Record<string, unknown> & {
   openaiCodexOauth?: OpenAIOAuthTokens
 }
 
+const SECURE_STORAGE_CACHE_KEY = '__secure-storage__'
+
 function getDesktopTokenFilePath(): string | null {
   const filePath = process.env[OPENAI_CODEX_OAUTH_FILE_ENV_KEY]?.trim()
   return filePath ? filePath : null
@@ -43,8 +45,7 @@ function normalizeTokenFile(value: unknown): OpenAIOAuthTokens | null {
   }
 }
 
-function readDesktopTokenFileSync(): OpenAIOAuthTokens | null {
-  const filePath = getDesktopTokenFilePath()
+function readDesktopTokenFileSync(filePath = getDesktopTokenFilePath()): OpenAIOAuthTokens | null {
   if (!filePath) return null
 
   try {
@@ -57,8 +58,9 @@ function readDesktopTokenFileSync(): OpenAIOAuthTokens | null {
   }
 }
 
-async function readDesktopTokenFileAsync(): Promise<OpenAIOAuthTokens | null> {
-  const filePath = getDesktopTokenFilePath()
+async function readDesktopTokenFileAsync(
+  filePath = getDesktopTokenFilePath(),
+): Promise<OpenAIOAuthTokens | null> {
   if (!filePath) return null
 
   try {
@@ -78,11 +80,26 @@ function writeDesktopTokenFileSync(tokens: OpenAIOAuthTokens): boolean {
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const tmpFile = `${filePath}.tmp.${process.pid}.${Date.now()}`
-  fs.writeFileSync(tmpFile, JSON.stringify(tokens, null, 2) + '\n', {
-    mode: 0o600,
-  })
-  fs.renameSync(tmpFile, filePath)
-  return true
+  let renamed = false
+
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(tokens, null, 2) + '\n', {
+      mode: 0o600,
+    })
+    fs.renameSync(tmpFile, filePath)
+    renamed = true
+    return true
+  } finally {
+    if (!renamed) {
+      try {
+        fs.rmSync(tmpFile, { force: true })
+      } catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logError(cleanupError)
+        }
+      }
+    }
+  }
 }
 
 export function saveOpenAIOAuthTokens(tokens: OpenAIOAuthTokens): {
@@ -110,23 +127,34 @@ export function saveOpenAIOAuthTokens(tokens: OpenAIOAuthTokens): {
   }
 }
 
-export const getOpenAIOAuthTokens = memoize((): OpenAIOAuthTokens | null => {
-  const desktopTokens = readDesktopTokenFileSync()
-  if (desktopTokens) return desktopTokens
+const getOpenAIOAuthTokensCached = memoize(
+  (cacheKey: string): OpenAIOAuthTokens | null => {
+    if (cacheKey !== SECURE_STORAGE_CACHE_KEY) {
+      return readDesktopTokenFileSync(cacheKey)
+    }
 
-  try {
-    const storage = getSecureStorage()
-    const data = storage.read() as SecureStorageShape | null
-    return data?.openaiCodexOauth ?? null
-  } catch (error) {
-    logError(error)
-    return null
-  }
-})
+    try {
+      const storage = getSecureStorage()
+      const data = storage.read() as SecureStorageShape | null
+      return data?.openaiCodexOauth ?? null
+    } catch (error) {
+      logError(error)
+      return null
+    }
+  },
+)
+
+export function getOpenAIOAuthTokens(): OpenAIOAuthTokens | null {
+  return getOpenAIOAuthTokensCached(
+    getDesktopTokenFilePath() ?? SECURE_STORAGE_CACHE_KEY,
+  )
+}
 
 export async function getOpenAIOAuthTokensAsync(): Promise<OpenAIOAuthTokens | null> {
-  const desktopTokens = await readDesktopTokenFileAsync()
-  if (desktopTokens) return desktopTokens
+  const filePath = getDesktopTokenFilePath()
+  if (filePath) {
+    return readDesktopTokenFileAsync(filePath)
+  }
 
   try {
     const storage = getSecureStorage()
@@ -139,7 +167,7 @@ export async function getOpenAIOAuthTokensAsync(): Promise<OpenAIOAuthTokens | n
 }
 
 export function clearOpenAIOAuthTokenCache(): void {
-  getOpenAIOAuthTokens.cache?.clear?.()
+  getOpenAIOAuthTokensCached.cache?.clear?.()
 }
 
 export function deleteOpenAIOAuthTokens(): boolean {
