@@ -1543,6 +1543,11 @@ export const zh: Record<TranslationKey, string> = {
   'serverVerb.Creating worktree': '正在创建工作树',
   'serverVerb.Task started': '任务已启动',
   'serverVerb.Task in progress': '任务进行中',
+  'chat.retry.title': '请求失败，正在重试',
+  'chat.retry.attempt': '第 {attempt}/{max} 次',
+  'chat.retry.httpStatus': 'HTTP {status}',
+  'chat.retry.networkError': '网络错误',
+  'chat.retry.waiting': '等待 {seconds}s',
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': '关闭',

@@ -148,6 +148,7 @@ function makeSession(overrides: Partial<PerSessionState> = {}): PerSessionState 
     tokenUsage: { input_tokens: 0, output_tokens: 0 },
     elapsedSeconds: 0,
     statusVerb: '',
+    apiRetry: null,
     slashCommands: [],
     agentTaskNotifications: {},
     backgroundAgentTasks: {},
@@ -2021,6 +2022,46 @@ describe('chatStore history mapping', () => {
       },
     ])
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
+  })
+
+  it('tracks API retry status until the request finishes', () => {
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          messages: [],
+          chatState: 'thinking',
+          statusVerb: 'Thinking',
+        }),
+      },
+    })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'api_retry',
+      attempt: 1,
+      maxRetries: 10,
+      retryDelayMs: 2500,
+      errorStatus: 503,
+      errorType: 'server_error',
+    })
+
+    const retryingSession = useChatStore.getState().sessions[TEST_SESSION_ID]
+    expect(retryingSession?.chatState).toBe('thinking')
+    expect(retryingSession?.statusVerb).toBe('')
+    expect(retryingSession?.apiRetry).toMatchObject({
+      attempt: 1,
+      maxRetries: 10,
+      retryDelayMs: 2500,
+      errorStatus: 503,
+      errorType: 'server_error',
+    })
+    expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 0 },
+    })
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.apiRetry).toBeNull()
   })
 
   it('renders memory saved notifications as chat memory events', () => {

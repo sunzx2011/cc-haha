@@ -37,6 +37,7 @@ function makeSessionState(overrides: Partial<PerSessionState> = {}): PerSessionS
     tokenUsage: { input_tokens: 0, output_tokens: 0 },
     elapsedSeconds: 0,
     statusVerb: '',
+    apiRetry: null,
     slashCommands: [],
     agentTaskNotifications: {},
     elapsedTimer: null,
@@ -493,6 +494,32 @@ describe('MessageList nested tool calls', () => {
     const divider = screen.getByTestId('compact-status-divider')
     expect(within(divider).getByText('Compacting context')).toBeTruthy()
     expect(screen.queryByText('Compacting context...')).toBeNull()
+  })
+
+  it('shows API retry metadata in the active turn indicator', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'thinking',
+          apiRetry: {
+            attempt: 2,
+            maxRetries: 10,
+            retryDelayMs: 3000,
+            errorStatus: 503,
+            errorType: 'server_error',
+            receivedAt: Date.now(),
+          },
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByTestId('api-retry-indicator')).toBeTruthy()
+    expect(screen.getByText('Request failed, retrying')).toBeTruthy()
+    expect(screen.getByText('retry 2/10')).toBeTruthy()
+    expect(screen.getByText('HTTP 503')).toBeTruthy()
+    expect(screen.getByText(/waiting \d+s/)).toBeTruthy()
   })
 
   it('renders compact completion as an expandable timeline divider', () => {

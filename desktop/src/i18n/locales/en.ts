@@ -1541,6 +1541,11 @@ export const en = {
   'serverVerb.Creating worktree': 'Creating worktree',
   'serverVerb.Task started': 'Task started',
   'serverVerb.Task in progress': 'Task in progress',
+  'chat.retry.title': 'Request failed, retrying',
+  'chat.retry.attempt': 'retry {attempt}/{max}',
+  'chat.retry.httpStatus': 'HTTP {status}',
+  'chat.retry.networkError': 'network error',
+  'chat.retry.waiting': 'waiting {seconds}s',
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': 'Close',

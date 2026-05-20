@@ -95,6 +95,29 @@ describe('WebSocket compact events', () => {
   })
 })
 
+describe('WebSocket API retry events', () => {
+  it('forwards CLI api_retry messages as structured retry status', () => {
+    expect(translateCliMessage({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 10,
+      retry_delay_ms: 1500,
+      error_status: 503,
+      error: 'server_error',
+    }, 'session-1')).toEqual([
+      {
+        type: 'api_retry',
+        attempt: 2,
+        maxRetries: 10,
+        retryDelayMs: 1500,
+        errorStatus: 503,
+        errorType: 'server_error',
+      },
+    ])
+  })
+})
+
 describe('WebSocket background task events', () => {
   it('forwards task start and progress as structured desktop notifications', () => {
     const started = {

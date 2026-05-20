@@ -1239,6 +1239,10 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     case 'system': {
       // 区分不同的 system 子类型
       const subtype = cliMsg.subtype
+      if (subtype === 'api_retry') {
+        const apiRetryMessage = toApiRetryServerMessage(cliMsg)
+        return apiRetryMessage ? [apiRetryMessage] : []
+      }
       if (subtype === 'init') {
         // CLI 初始化完成 — 缓存 slash commands 并发送模型信息
         // NOTE: Do NOT send status:idle here — the CLI init fires while
@@ -1385,6 +1389,58 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 // ============================================================================
 // Helpers
 // ============================================================================
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeRetryCount(value: unknown): number | null {
+  const numeric = finiteNumber(value)
+  if (numeric === null) return null
+  return Math.max(0, Math.trunc(numeric))
+}
+
+function readRetryErrorRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function readRetryErrorString(value: unknown, keys: string[]): string | undefined {
+  const record = readRetryErrorRecord(value)
+  if (!record) return undefined
+  for (const key of keys) {
+    const candidate = record[key]
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+  }
+  return undefined
+}
+
+function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
+  const attempt = normalizeRetryCount(cliMsg.attempt)
+  const maxRetries = normalizeRetryCount(cliMsg.max_retries)
+  const retryDelayMs = normalizeRetryCount(cliMsg.retry_delay_ms)
+  if (attempt === null || maxRetries === null || retryDelayMs === null) return null
+
+  const embeddedError = readRetryErrorRecord(cliMsg.error)
+  const embeddedStatus = embeddedError ? finiteNumber(embeddedError.status) : null
+  const rawStatus = cliMsg.error_status === null
+    ? null
+    : finiteNumber(cliMsg.error_status) ?? embeddedStatus
+  const errorType = typeof cliMsg.error === 'string' && cliMsg.error.trim()
+    ? cliMsg.error.trim()
+    : readRetryErrorString(cliMsg.error, ['type', 'code', 'name'])
+  const errorMessage = readRetryErrorString(cliMsg.error, ['message', 'error'])
+
+  return {
+    type: 'api_retry',
+    attempt,
+    maxRetries,
+    retryDelayMs,
+    errorStatus: rawStatus === null ? null : Math.trunc(rawStatus),
+    ...(errorType ? { errorType } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+  }
+}
 
 function sendMessage(ws: ServerWebSocket<WebSocketData>, message: ServerMessage) {
   ws.send(JSON.stringify(message))

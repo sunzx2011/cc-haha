@@ -17,6 +17,7 @@ import type { RuntimeSelection } from '../types/runtime'
 import type {
   ActiveGoalState,
   AgentTaskNotification,
+  ApiRetryState,
   AttachmentRef,
   BackgroundAgentTask,
   BackgroundAgentTaskUsage,
@@ -63,6 +64,7 @@ export type PerSessionState = {
   tokenUsage: TokenUsage
   elapsedSeconds: number
   statusVerb: string
+  apiRetry?: ApiRetryState | null
   slashCommands: Array<{ name: string; description: string; argumentHint?: string }>
   agentTaskNotifications: Record<string, AgentTaskNotification>
   backgroundAgentTasks?: Record<string, BackgroundAgentTask>
@@ -90,6 +92,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   tokenUsage: { input_tokens: 0, output_tokens: 0 },
   elapsedSeconds: 0,
   statusVerb: '',
+  apiRetry: null,
   slashCommands: [],
   agentTaskNotifications: {},
   backgroundAgentTasks: {},
@@ -784,6 +787,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             elapsedSeconds: 0,
             streamingText: '',
             statusVerb: isMemberSession ? '' : randomSpinnerVerb(),
+            apiRetry: null,
             elapsedTimer: timer,
             connectionState: isMemberSession ? 'connected' : session.connectionState,
           },
@@ -871,6 +875,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             chatState: 'idle',
             pendingPermission: null,
             pendingComputerUsePermission: null,
+            apiRetry: null,
             elapsedTimer: null,
           },
         },
@@ -960,6 +965,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             pendingComputerUsePermission: null,
             elapsedTimer: null,
             statusVerb: '',
+            apiRetry: null,
           })),
         }
       })
@@ -1015,7 +1021,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   clearMessages: (sessionId) => {
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
-    set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ messages: [], activeGoal: null, streamingText: '', chatState: 'idle' })) }))
+    set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
+      messages: [],
+      activeGoal: null,
+      streamingText: '',
+      chatState: 'idle',
+      apiRetry: null,
+    })) }))
   },
 
   handleServerMessage: (sessionId, msg) => {
@@ -1061,6 +1073,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 : '',
             ...(msg.tokens ? { tokenUsage: { ...session.tokenUsage, output_tokens: msg.tokens } } : {}),
             ...(msg.state === 'idle' ? { activeThinkingId: null } : {}),
+            ...(msg.state === 'idle' ? { apiRetry: null } : {}),
             ...((shouldFlush || msg.state === 'compacting') ? { messages: nextMessages } : {}),
             ...(shouldFlush ? {
               streamingText: '',
@@ -1093,6 +1106,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
             chatState: 'streaming',
             activeThinkingId: null,
+            apiRetry: null,
           }))
         } else if (msg.blockType === 'tool_use') {
           rememberPendingToolParentUseId(sessionId, msg.toolUseId, msg.parentToolUseId)
@@ -1102,8 +1116,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             streamingToolInput: '',
             chatState: 'tool_executing',
             activeThinkingId: null,
+            apiRetry: null,
           }))
         }
+        break
+      }
+
+      case 'api_retry': {
+        const attempt = Math.max(1, Math.trunc(msg.attempt))
+        const maxRetries = Math.max(attempt, Math.trunc(msg.maxRetries))
+        const retryDelayMs = Math.max(0, Math.trunc(msg.retryDelayMs))
+        update((session) => ({
+          apiRetry: {
+            attempt,
+            maxRetries,
+            retryDelayMs,
+            errorStatus: msg.errorStatus ?? null,
+            errorType: msg.errorType,
+            errorMessage: msg.errorMessage,
+            receivedAt: Date.now(),
+          },
+          chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
+          activeThinkingId: null,
+          statusVerb: '',
+        }))
+        useTabStore.getState().updateTabStatus(sessionId, 'running')
         break
       }
 
@@ -1224,6 +1261,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingComputerUsePermission: null,
           chatState: 'permission_pending',
           activeThinkingId: null,
+          apiRetry: null,
           messages:
             msg.toolName === 'AskUserQuestion'
               ? s.messages
@@ -1257,6 +1295,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingPermission: null,
           chatState: 'permission_pending',
           activeThinkingId: null,
+          apiRetry: null,
         }))
         break
 
@@ -1283,6 +1322,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           pendingPermission: null,
           pendingComputerUsePermission: null,
           elapsedTimer: null,
+          apiRetry: null,
         }))
         useTabStore.getState().updateTabStatus(sessionId, 'idle')
         const notification = wasAgentRunning
@@ -1316,6 +1356,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             streamingText: '',
             pendingPermission: null,
             pendingComputerUsePermission: null,
+            apiRetry: null,
           }
         })
         useTabStore.getState().updateTabStatus(sessionId, 'error')
@@ -1378,6 +1419,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             elapsedTimer: null,
             elapsedSeconds: 0,
             statusVerb: '',
+            apiRetry: null,
             tokenUsage: { input_tokens: 0, output_tokens: 0 },
             slashCommands: [],
             activeGoal: null,
