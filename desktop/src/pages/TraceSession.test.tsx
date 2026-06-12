@@ -6,7 +6,7 @@ import { sessionsApi } from '../api/sessions'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { clearTraceCallCache } from '../lib/trace/callCache'
-import { resetTraceSectionState } from '../components/trace/detail/Section'
+import { Section, resetTraceSectionState } from '../components/trace/detail/Section'
 import type { MessageEntry } from '../types/session'
 import type { TraceCallRecord, TraceSession as TraceSessionData } from '../types/trace'
 
@@ -348,17 +348,65 @@ describe('TraceSession', () => {
       })
     await renderReady(20)
 
-    // Select the model call; identical poll ticks must not reset the selection
-    // or re-trigger the on-demand detail fetch.
     fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
     await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(3))
 
-    // The grown snapshot lands and renders both calls.
     await screen.findByText('claude-sonnet-4-5 x2')
     expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1)
     const detail = within(screen.getByTestId('trace-detail'))
     expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
+  })
+
+  it('applies poll updates when a call changes without changing row counts', async () => {
+    const pendingTrace: TraceSessionData = {
+      ...baseTrace,
+      summary: {
+        ...baseTrace.summary,
+        failedCalls: 0,
+        updatedAt: '2026-06-09T10:00:01.000Z',
+      },
+      calls: [makeCall({ status: 'pending', completedAt: undefined, durationMs: undefined, response: undefined, usage: undefined })],
+    }
+    const completedTrace: TraceSessionData = {
+      ...baseTrace,
+      summary: {
+        ...baseTrace.summary,
+        failedCalls: 1,
+        updatedAt: '2026-06-09T10:00:01.000Z',
+      },
+      calls: [makeCall({ status: 'error', error: { name: 'Error', message: 'rate limited' }, response: undefined })],
+    }
+    vi.mocked(sessionsApi.getTrace)
+      .mockResolvedValueOnce(pendingTrace)
+      .mockResolvedValue(completedTrace)
+
+    await renderReady(20)
+
+    await waitFor(() => expect(vi.mocked(sessionsApi.getTrace).mock.calls.length).toBeGreaterThanOrEqual(2))
+    const diagnosis = within(screen.getByTestId('trace-diagnosis'))
+    expect(diagnosis.getByText('error')).toBeInTheDocument()
+    expect(diagnosis.getByText('Model call failed')).toBeInTheDocument()
+  })
+
+  it('keeps section collapse state scoped to each trace session instance', async () => {
+    const { rerender } = render(
+      <Section key="left" scopeId="left" sectionKey="llm.raw" title="Raw" defaultOpen>
+        left body
+      </Section>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Raw/ }))
+    expect(screen.queryByText('left body')).not.toBeInTheDocument()
+
+    rerender(
+      <Section key="right" scopeId="right" sectionKey="llm.raw" title="Raw" defaultOpen>
+        right body
+      </Section>,
+    )
+
+    expect(screen.getByRole('button', { name: /Raw/ })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('right body')).toBeInTheDocument()
   })
 
   it('supports keyboard navigation in the tree', async () => {

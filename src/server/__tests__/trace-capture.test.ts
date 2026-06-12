@@ -918,12 +918,12 @@ describe('session trace API', () => {
 })
 
 describe('trace read cache', () => {
-  function buildTraceCallLine(id: string): string {
+  function buildTraceCallLine(id: string, sessionId = 'session-cache-hit', payload = 'ok'): string {
     return `${JSON.stringify({
       type: 'call',
       record: {
         id,
-        sessionId: 'session-cache-hit',
+        sessionId,
         source: 'proxy',
         status: 'ok',
         startedAt: '2026-06-09T08:00:00.000Z',
@@ -933,7 +933,7 @@ describe('trace read cache', () => {
           method: 'POST',
           url: 'https://api.example.test/v1/chat/completions',
           headers: {},
-          body: createTraceBodySnapshot({ model: 'gpt-5.5' }),
+          body: createTraceBodySnapshot({ model: 'gpt-5.5', payload }),
         },
         response: {
           status: 200,
@@ -972,6 +972,22 @@ describe('trace read cache', () => {
 
     const third = await traceCaptureService.getSessionTrace('session-cache-hit')
     expect(third.calls.map((call) => call.id)).toEqual(['call-bbb'])
+  })
+
+  test('stores trimmed records in the list cache and keeps full records for detail reads', async () => {
+    const traceDir = path.join(tmpDir, 'cc-haha', 'traces')
+    const filePath = path.join(traceDir, 'session-cache-list.jsonl')
+    await fs.mkdir(traceDir, { recursive: true })
+    await fs.writeFile(filePath, buildTraceCallLine('call-list-cache', 'session-cache-list', 'x'.repeat(10_000)))
+
+    const list = await traceCaptureService.listSessionTraces({ sessionIds: ['session-cache-list'] })
+    expect(list.traces).toHaveLength(1)
+
+    const trace = await traceCaptureService.getSessionTrace('session-cache-list')
+    const detail = await traceCaptureService.getSessionTraceCall('session-cache-list', 'call-list-cache')
+
+    expect(trace.calls[0].request.body.preview.length).toBeGreaterThan(2048)
+    expect(detail?.request.body.preview.length).toBeGreaterThan(2048)
   })
 
   test('invalidates the cache when new entries are appended in process', async () => {
