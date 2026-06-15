@@ -5,6 +5,7 @@ import {
   SETTINGS_TAB_ID,
   TERMINAL_TAB_PREFIX,
   TRACE_TAB_PREFIX,
+  WORKBENCH_TAB_PREFIX,
   useTabStore,
   type TabType,
 } from '../stores/tabStore'
@@ -47,7 +48,8 @@ function isSessionTabState(activeTabId: string | null, activeTabType: TabType | 
   return activeTabId !== SETTINGS_TAB_ID &&
     activeTabId !== SCHEDULED_TAB_ID &&
     !activeTabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !activeTabId.startsWith(TRACE_TAB_PREFIX)
+    !activeTabId.startsWith(TRACE_TAB_PREFIX) &&
+    !activeTabId.startsWith(WORKBENCH_TAB_PREFIX)
 }
 
 function getSessionTerminalCwd(session: SessionListItem | undefined) {

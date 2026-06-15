@@ -38,6 +38,11 @@ type WorkspacePanelProps = {
    * button so the panel header doesn't render a duplicate close control.
    */
   embedded?: boolean
+  /**
+   * Main-content workbench tabs reuse the same workspace preview UI without
+   * depending on the right-side panel's open bit.
+   */
+  forceVisible?: boolean
 }
 
 type TreeNodeProps = {
@@ -912,7 +917,7 @@ function TreeNode({
   )
 }
 
-export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelProps) {
+export function WorkspacePanel({ sessionId, embedded = false, forceVisible = false }: WorkspacePanelProps) {
   const t = useTranslation()
   const addToast = useUIStore((state) => state.addToast)
   const [filterQuery, setFilterQuery] = useState('')
@@ -946,6 +951,7 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const addWorkspaceReference = useWorkspaceChatContextStore((state) => state.addReference)
   const chatState = useChatStore((state) => state.sessions[sessionId]?.chatState ?? 'idle')
+  const shouldRender = forceVisible || isOpen
   const refreshLifecycleRef = useRef({
     sessionId,
     isOpen: false,
@@ -986,25 +992,25 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
   useEffect(() => {
     const previous = refreshLifecycleRef.current
     const sessionChanged = previous.sessionId !== sessionId
-    const opened = isOpen && (sessionChanged || !previous.isOpen)
+    const opened = shouldRender && (sessionChanged || !previous.isOpen)
     const completedTurn =
-      isOpen &&
+      shouldRender &&
       !sessionChanged &&
       previous.chatState !== 'idle' &&
       chatState === 'idle'
 
-    refreshLifecycleRef.current = { sessionId, isOpen, chatState }
+    refreshLifecycleRef.current = { sessionId, isOpen: shouldRender, chatState }
 
     const shouldRefreshOnOpen = opened
     const shouldRefreshAfterCompletedTurn = completedTurn && chatState === 'idle'
     if ((!shouldRefreshOnOpen && !shouldRefreshAfterCompletedTurn) || statusLoading) return
     void loadStatus(sessionId)
-  }, [chatState, isOpen, loadStatus, sessionId, statusLoading])
+  }, [chatState, loadStatus, sessionId, shouldRender, statusLoading])
 
   useEffect(() => {
-    if (!isOpen || !isNavigatorVisible || activeView !== 'all' || rootTree || rootTreeLoading || rootTreeError) return
+    if (!shouldRender || !isNavigatorVisible || activeView !== 'all' || rootTree || rootTreeLoading || rootTreeError) return
     void loadTree(sessionId, '')
-  }, [activeView, isNavigatorVisible, isOpen, loadTree, rootTree, rootTreeError, rootTreeLoading, sessionId])
+  }, [activeView, isNavigatorVisible, loadTree, rootTree, rootTreeError, rootTreeLoading, sessionId, shouldRender])
 
   useEffect(() => {
     if (!previewTabContextMenu && !fileContextMenu) return
@@ -1028,7 +1034,7 @@ export function WorkspacePanel({ sessionId, embedded = false }: WorkspacePanelPr
     }
   }, [isNavigatorVisible])
 
-  if (!isOpen) return null
+  if (!shouldRender) return null
 
   const panelWidth = hasPreviewTabs ? width : Math.min(width, 520)
   const panelMaxWidth = hasPreviewTabs ? 'min(62%, calc(100% - 328px))' : '36%'
